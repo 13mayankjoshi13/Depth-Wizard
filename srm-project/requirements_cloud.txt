@@ -1,0 +1,52 @@
+# =============================================================
+# requirements_cloud.txt — Streamlit Community Cloud deployment
+# SIH26142: Deep Learning Based Super Resolution Mapping
+# =============================================================
+#
+# DIFFERENCES from requirements.txt (local):
+#   - basicsr installed from GitHub (avoids distutils issues on cloud)
+#   - torch cpu-only wheel (cloud has no GPU)
+#   - No training-only packages (train.py not used on cloud)
+#   - Pinned versions known to work on Streamlit Cloud (Python 3.11, Ubuntu 22.04)
+#
+# Streamlit Cloud reads this automatically when named requirements.txt
+# (rename or set Main file path in app settings)
+# =============================================================
+
+# --- Core ML (CPU-only on cloud — GPU not available) ---
+torch==2.2.0+cpu
+torchvision==0.17.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# --- Real-ESRGAN stack ---
+# basicsr from GitHub avoids the distutils/exec() Python 3.12+ issue
+basicsr @ git+https://github.com/XPixelGroup/BasicSR.git@master
+facexlib>=0.3.0
+gfpgan>=1.3.8
+realesrgan>=0.3.0
+
+# --- Remote sensing / GeoTIFF ---
+rasterio>=1.3.9
+pyproj>=3.6.1
+shapely>=2.0.3
+
+# --- Image processing ---
+opencv-python-headless>=4.9.0.80
+scikit-image>=0.22.0
+numpy>=1.26.0
+Pillow>=10.2.0
+scipy>=1.12.0
+
+# --- Dashboard ---
+streamlit>=1.31.0
+folium>=0.15.1
+streamlit-folium>=0.18.0
+streamlit-image-comparison>=0.0.4
+pydeck>=0.8.1b0
+matplotlib>=3.8.0
+plotly>=5.18.0
+
+# --- Data handling ---
+tqdm>=4.66.1
+requests>=2.31.0
+h5py>=3.10.0

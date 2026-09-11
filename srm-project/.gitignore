@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+
+# ─────────────────────────────────────────────────────────
+# Model weights (large binary files — store on HuggingFace/Drive)
+# ─────────────────────────────────────────────────────────
+src/checkpoints/*.pth
+src/checkpoints/*.pt
+src/checkpoints/*.ckpt
+
+# ─────────────────────────────────────────────────────────
+# Data (large satellite tiles — not tracked in git)
+# ─────────────────────────────────────────────────────────
+data/raw/
+data/synthetic_pairs/
+data/outputs/*.tif
+data/outputs/*.tiff
+data/outputs/*.png
+data/outputs/*.jp2
+
+# ─────────────────────────────────────────────────────────
+# Keep directory stubs
+# ─────────────────────────────────────────────────────────
+!data/raw/.gitkeep
+!data/synthetic_pairs/.gitkeep
+!data/outputs/.gitkeep
+!src/checkpoints/.gitkeep
+
+# ─────────────────────────────────────────────────────────
+# IDE & OS
+# ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ─────────────────────────────────────────────────────────
+# Misc
+# ─────────────────────────────────────────────────────────
+*.log
+.pytest_cache/
+.coverage
+htmlcov/

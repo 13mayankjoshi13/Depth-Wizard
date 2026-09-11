@@ -1,0 +1,58 @@
+# =========================================================
+# SRM Project — Requirements (pinned for reproducibility)
+# SIH26142: Deep Learning Based Super Resolution Mapping
+# Verified on: Python 3.14.5, Windows 11
+# =========================================================
+#
+# INSTALL ORDER (important!):
+#   pip install torch torchvision          # PyTorch first
+#   pip install setuptools                 # distutils shim for Python 3.12+
+#   pip install -r requirements.txt
+#
+# Or simply run: .\setup_env.ps1
+
+# --- Core ML ---
+torch>=2.1.0
+torchvision>=0.16.0
+
+# --- Real-ESRGAN dependencies ---
+# NOTE: basicsr must be installed BEFORE realesrgan
+basicsr>=1.4.2
+facexlib>=0.3.0
+gfpgan>=1.3.8
+realesrgan>=0.3.0
+
+# --- Remote sensing / GeoTIFF ---
+# rasterio ships bundled GDAL on Windows via PyPI wheels
+rasterio>=1.3.9
+pyproj>=3.6.1
+shapely>=2.0.3
+
+# --- Image processing ---
+opencv-python-headless>=4.9.0.80
+scikit-image>=0.22.0
+numpy>=1.26.0
+Pillow>=10.2.0
+scipy>=1.12.0
+
+# --- Dashboard ---
+streamlit>=1.31.0
+folium>=0.15.1
+streamlit-folium>=0.18.0
+streamlit-image-comparison>=0.0.4
+pydeck>=0.8.1b0
+matplotlib>=3.8.0
+plotly>=5.18.0
+
+# --- Data handling ---
+tqdm>=4.66.1
+requests>=2.31.0
+h5py>=3.10.0
+
+# --- Testing ---
+pytest>=8.0.0
+pytest-cov>=4.1.0
+
+# --- Optional: automated Sentinel-2 download ---
+# Uncomment after creating a Copernicus account
+# sentinelsat>=1.2.1
