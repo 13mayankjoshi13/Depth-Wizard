@@ -200,6 +200,7 @@ def generate_all_pairs(
     raw_dir: Path | str = Path("data/raw"),
     out_dir: Path | str = Path("data/synthetic_pairs"),
     patch_size: int = 512,
+    overlap: int = 64,
     scale: int = 4,
     rgb_only: bool = False,
     seed: int = 42,
@@ -214,7 +215,7 @@ def generate_all_pairs(
     total = 0
     for tif in tifs:
         total += generate_pairs_from_tile(
-            tif, out_dir, patch_size=patch_size, scale=scale,
+            tif, out_dir, patch_size=patch_size, overlap=overlap, scale=scale,
             rgb_only=rgb_only, seed=seed,
         )
     logger.info("Total pairs generated: %d", total)
@@ -275,6 +276,7 @@ if __name__ == "__main__":
     parser.add_argument("--raw-dir", default="data/raw", help="Input GeoTIFF directory")
     parser.add_argument("--out-dir", default="data/synthetic_pairs", help="Output directory")
     parser.add_argument("--patch-size", type=int, default=512)
+    parser.add_argument("--overlap", type=int, default=64, help="Overlap between consecutive patches")
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--rgb-only", action="store_true",
                         help="Only use RGB bands (faster, good for display)")
@@ -285,6 +287,7 @@ if __name__ == "__main__":
         raw_dir=args.raw_dir,
         out_dir=args.out_dir,
         patch_size=args.patch_size,
+        overlap=args.overlap,
         scale=args.scale,
         rgb_only=args.rgb_only,
         seed=args.seed,
