@@ -137,10 +137,10 @@ def run_inference(
     # ── Tiled inference with Hann blending ────────────────────────────────────
     sr_h = orig_h * scale
     sr_w = orig_w * scale
-    canvas = np.zeros((n_bands, sr_h, sr_w), dtype=np.float64)
-    weight_map = np.zeros((sr_h, sr_w), dtype=np.float64)
-    unc_canvas = np.zeros((sr_h, sr_w), dtype=np.float64)
-    unc_weight = np.zeros((sr_h, sr_w), dtype=np.float64)
+    canvas = np.zeros((n_bands, sr_h, sr_w), dtype=np.float32)
+    weight_map = np.zeros((sr_h, sr_w), dtype=np.float32)
+    unc_canvas = np.zeros((sr_h, sr_w), dtype=np.float32)
+    unc_weight = np.zeros((sr_h, sr_w), dtype=np.float32)
 
     stride = patch_size - overlap
     row_starts = list(range(0, orig_h - patch_size + 1, stride))
