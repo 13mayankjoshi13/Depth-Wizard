@@ -59,7 +59,8 @@ def _make_hann_window(h: int, w: int) -> np.ndarray:
 
 def run_inference(
     input_path: Path | str,
-    output_dir: Path | str,
+    output_dir: Path | str = "data/outputs",
+    output_path: Optional[Path | str] = None,
     gt_path: Optional[Path | str] = None,
     checkpoint_path: Optional[Path | str] = None,
     model_key: str = "x4plus",
@@ -84,10 +85,16 @@ def run_inference(
     from src.metrics import evaluate_pair
 
     input_path = Path(input_path)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if output_path is not None:
+        sr_tif_path = Path(output_path)
+        output_dir = sr_tif_path.parent
+        stem = sr_tif_path.stem
+    else:
+        output_dir = Path(output_dir)
+        stem = input_path.stem
+        sr_tif_path = output_dir / f"{stem}_sr_x{scale}.tif"
 
-    stem = input_path.stem
+    output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
 
@@ -237,7 +244,6 @@ def run_inference(
         orig_transform.a / scale, orig_transform.b, orig_transform.c,
         orig_transform.d, orig_transform.e / scale, orig_transform.f,
     )
-    sr_tif_path = output_dir / f"{stem}_sr_x{scale}.tif"
     with rasterio.open(
         sr_tif_path, "w",
         driver="GTiff",
@@ -251,7 +257,7 @@ def run_inference(
         dst.write(sr_full)
     logger.info("SR GeoTIFF saved → %s", sr_tif_path)
 
-    # ── Save uncertainty heatmap ──────────────────────────────────────────────
+    # ── Save uncertainty heatmap & npy ────────────────────────────────────────
     unc_path = output_dir / f"{stem}_uncertainty.png"
     if compute_uncertainty:
         # Extract RGB preview for blended display
@@ -264,6 +270,8 @@ def run_inference(
             sr_rgb = np.stack([ch, ch, ch], axis=-1)
             sr_rgb = (sr_rgb * 255).astype(np.uint8)
         save_uncertainty_heatmap(unc_full, unc_path, sr_image_rgb=sr_rgb)
+        np.save(output_dir / f"{stem}_uncertainty.npy", unc_full)
+        logger.info("Uncertainty heatmap saved → %s", unc_path)
 
     # ── Compute metrics vs ground truth (if provided) ─────────────────────────
     metrics = {}
@@ -318,6 +326,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--input", required=True, help="Input GeoTIFF path")
+    parser.add_argument("--output", default=None, help="Explicit output GeoTIFF file path (optional)")
     parser.add_argument("--output-dir", default="data/outputs", help="Output directory")
     parser.add_argument("--gt", default=None, help="Ground-truth GeoTIFF (optional, for metrics)")
     parser.add_argument("--checkpoint", default=None, help="Fine-tuned checkpoint .pth (optional)")
@@ -346,6 +355,7 @@ if __name__ == "__main__":
     result = run_inference(
         input_path=args.input,
         output_dir=args.output_dir,
+        output_path=args.output,
         gt_path=args.gt,
         checkpoint_path=args.checkpoint,
         model_key=args.model_key,
