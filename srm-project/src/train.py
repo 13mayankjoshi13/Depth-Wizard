@@ -74,9 +74,10 @@ class PerceptualLoss(nn.Module):
             std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
             return (x - mean) / std
 
-        feat_pred = self.feature_extractor(_prep(pred))
-        feat_target = self.feature_extractor(_prep(target.detach()))
-        return F.l1_loss(feat_pred, feat_target)
+        with torch.amp.autocast('cuda', enabled=False):
+            feat_pred = self.feature_extractor(_prep(pred.float()))
+            feat_target = self.feature_extractor(_prep(target.detach().float()))
+            return F.l1_loss(feat_pred, feat_target)
 
 
 class SAMLoss(nn.Module):
@@ -92,14 +93,16 @@ class SAMLoss(nn.Module):
         self.eps = eps
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # pred, target: (B, C, H, W) in [0, 1]
-        dot = torch.sum(pred * target, dim=1)
-        norm_pred = torch.norm(pred, p=2, dim=1)
-        norm_target = torch.norm(target, p=2, dim=1)
-        cos_sim = dot / (norm_pred * norm_target + self.eps)
-        cos_sim = torch.clamp(cos_sim, -1.0 + self.eps, 1.0 - self.eps)
-        sam_rad = torch.acos(cos_sim)
-        return torch.mean(sam_rad)
+        with torch.amp.autocast('cuda', enabled=False):
+            pred_f = pred.float()
+            target_f = target.float()
+            dot = torch.sum(pred_f * target_f, dim=1)
+            norm_pred = torch.norm(pred_f, p=2, dim=1)
+            norm_target = torch.norm(target_f, p=2, dim=1)
+            cos_sim = dot / (norm_pred * norm_target + self.eps)
+            cos_sim = torch.clamp(cos_sim, -0.9999, 0.9999)
+            sam_rad = torch.acos(cos_sim)
+            return torch.mean(sam_rad)
 
 
 class EdgeLoss(nn.Module):
@@ -137,9 +140,10 @@ class FrequencyLoss(nn.Module):
     """
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        pred_fft = torch.fft.rfft2(pred, norm="ortho")
-        target_fft = torch.fft.rfft2(target, norm="ortho")
-        return F.l1_loss(torch.abs(pred_fft), torch.abs(target_fft))
+        with torch.amp.autocast('cuda', enabled=False):
+            pred_fft = torch.fft.rfft2(pred.float(), norm="ortho")
+            target_fft = torch.fft.rfft2(target.float(), norm="ortho")
+            return F.l1_loss(torch.abs(pred_fft), torch.abs(target_fft))
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -53,9 +53,15 @@ def _make_hann_window(h: int, w: int) -> np.ndarray:
     return np.outer(win_h, win_w).astype(np.float32)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Core inference function
-# ──────────────────────────────────────────────────────────────────────────────
+def unsharp_mask(image: np.ndarray, strength: float = 0.35, sigma: float = 1.0) -> np.ndarray:
+    """Apply edge-preserving unsharp mask to boost building outlines and linear road features."""
+    import cv2
+    blurred = np.empty_like(image)
+    for c in range(image.shape[0]):
+        blurred[c] = cv2.GaussianBlur(image[c], (0, 0), sigma)
+    detail = image - blurred
+    return np.clip(image + strength * detail, 0.0, 1.0)
+
 
 def run_inference(
     input_path: Path | str,
@@ -72,6 +78,7 @@ def run_inference(
     tile_size: int = 256,
     half: bool = False,
     rgb_band_indices: tuple = (2, 1, 0),
+    sharpen: float = 0.35,
 ) -> dict:
     """
     Run full inference on a single GeoTIFF and save outputs.
@@ -233,6 +240,9 @@ def run_inference(
     # Normalise by blend weights
     wm = np.where(weight_map > 0, weight_map, 1.0)
     sr_full = (canvas / wm).astype(np.float32).clip(0, 1)
+    if sharpen > 0.0:
+        logger.info("Applying edge-preserving unsharp mask (strength=%.2f) …", sharpen)
+        sr_full = unsharp_mask(sr_full, strength=sharpen)
     uw = np.where(unc_weight > 0, unc_weight, 1.0)
     unc_full = (unc_canvas / uw).astype(np.float32)
 
@@ -338,6 +348,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--no-uncertainty", action="store_true", help="Skip uncertainty estimation (faster)")
     parser.add_argument("--tta-n", type=int, default=8, help="Number of TTA augmentations")
     parser.add_argument("--half", action="store_true", help="Use FP16 inference (CUDA only)")
+    parser.add_argument("--sharpen", type=float, default=0.35, help="Edge sharpening strength (0.0 = off, 0.3-0.5 = crisp)")
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser.parse_args()
 
@@ -366,6 +377,7 @@ if __name__ == "__main__":
         tta_n=args.tta_n,
         tile_size=args.tile_size,
         half=args.half,
+        sharpen=args.sharpen,
     )
 
     print("\n" + "═" * 60)
