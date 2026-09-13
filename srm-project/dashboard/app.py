@@ -108,7 +108,11 @@ st.markdown(
 
 @st.cache_resource(show_spinner="Loading Real-ESRGAN model …")
 def _load_model(model_key: str, checkpoint_path: Optional[str], half: bool, tile_size: int):
-    """Load and cache the Real-ESRGAN upsampler (runs once per session)."""
+    """Load and cache the Real-ESRGAN upsampler (runs once per session).
+
+    tile=0 disables RealESRGANer's internal sub-tiler so that our outer
+    Hann-blended loop in inference.py is the only tiling strategy (Bug 1 fix).
+    """
     import torch
     from src.model import load_realesrgan
 
@@ -117,7 +121,7 @@ def _load_model(model_key: str, checkpoint_path: Optional[str], half: bool, tile
         model_key=model_key,
         checkpoint_path=checkpoint_path or None,
         scale=4,
-        tile=tile_size,
+        tile=0,   # BUG-1 FIX: disable internal tiling — see inference.py
         half=(half and device.type == "cuda"),
         device=device,
     )

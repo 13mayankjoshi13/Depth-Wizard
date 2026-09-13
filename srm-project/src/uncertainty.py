@@ -65,7 +65,13 @@ def _augment_chw(img: np.ndarray, aug_id: int) -> np.ndarray:
 
 
 def _deaugment_chw(img: np.ndarray, aug_id: int) -> np.ndarray:
-    """Reverse augmentation aug_id from (C, H, W) float32 array."""
+    """
+    Reverse augmentation aug_id from (C, H, W) float32 array.
+
+    Inverse composition rule: if forward = A then B, inverse = B⁻¹ then A⁻¹.
+    For aug_id 6: forward = rot90(1) then fliplr → inverse = fliplr then rot90(-1)
+    For aug_id 7: forward = rot90(1) then flipud → inverse = flipud then rot90(-1)
+    """
     _, h, w = img.shape
     t = img.transpose(1, 2, 0)
 
@@ -82,9 +88,13 @@ def _deaugment_chw(img: np.ndarray, aug_id: int) -> np.ndarray:
     elif aug_id == 5:
         out = np.flipud(t)
     elif aug_id == 6:
-        out = np.fliplr(np.rot90(t, -1))
+        # BUG-4 FIX: forward was rot90(1) THEN fliplr.
+        # Correct inverse: fliplr THEN rot90(-1)  (reverse op order).
+        out = np.rot90(np.fliplr(t), -1)
     else:
-        out = np.flipud(np.rot90(t, -1))
+        # BUG-4 FIX: forward was rot90(1) THEN flipud.
+        # Correct inverse: flipud THEN rot90(-1)  (reverse op order).
+        out = np.rot90(np.flipud(t), -1)
 
     return out.transpose(2, 0, 1)
 

@@ -38,9 +38,19 @@ logger = logging.getLogger(__name__)
 # Hann-window blend helper
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _hann_window(size: int) -> np.ndarray:
-    win_1d = np.hanning(size)
-    return np.outer(win_1d, win_1d).astype(np.float32)
+def _make_hann_window(h: int, w: int) -> np.ndarray:
+    """
+    Build a 2-D Hann window of shape (h, w).
+
+    Always built from the *actual* patch dimensions so that even boundary
+    patches (which may be smaller than the full tile after canvas clipping)
+    receive a complete 0 → 1 → 0 taper across their full extent.  This
+    prevents the near-zero leading-edge slice that caused bright/dark seams
+    at the right and bottom edges of the scene.
+    """
+    win_h = np.hanning(h)
+    win_w = np.hanning(w)
+    return np.outer(win_h, win_w).astype(np.float32)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,7 +101,13 @@ def run_inference(
         model_key=model_key,
         checkpoint_path=checkpoint_path,
         scale=scale,
-        tile=tile_size,
+        # BUG-1 FIX: pass tile=0 to disable RealESRGANer's *internal* tiling.
+        # The library's built-in tiler uses reflect-padding with its own
+        # tile_pad boundary, which creates a second independent grid of seams
+        # underneath our outer Hann-blended loop.  Setting tile=0 forces the
+        # library to process each outer patch in one shot, leaving all
+        # boundary handling to our weighted blend.
+        tile=0,
         half=(half and device.type == "cuda"),
         device=device,
     )
@@ -127,8 +143,8 @@ def run_inference(
     logger.info("Processing %d patches (patch_size=%d, overlap=%d) …", total_patches, patch_size, overlap)
     t0 = time.time()
     processed = 0
-
-    hann = _hann_window(patch_size * scale)   # blending window in SR space
+    # BUG-2 FIX: Hann window is now built *per patch* inside the loop from the
+    # actual SR output dimensions (see _make_hann_window call below).
 
     for row_off in row_starts:
         for col_off in col_starts:
@@ -161,14 +177,22 @@ def run_inference(
             pr_end = row_end - sr_row
             pc_end = col_end - sr_col
 
+            # BUG-2 FIX: build the Hann window from the *actual* dimensions of
+            # the valid SR region (pr_end × pc_end) rather than slicing a
+            # pre-built max-size window.  Slicing would grab only the near-zero
+            # leading edge of the window for boundary patches, causing the
+            # weight_map to accumulate almost nothing there → divide-by-near-
+            # zero → bright / dark seams at the right and bottom scene edges.
+            hann = _make_hann_window(pr_end, pc_end)
+
             canvas[:, sr_row:row_end, sr_col:col_end] += (
-                sr_patch[:, :pr_end, :pc_end] * hann[:pr_end, :pc_end]
+                sr_patch[:, :pr_end, :pc_end] * hann
             )
-            weight_map[sr_row:row_end, sr_col:col_end] += hann[:pr_end, :pc_end]
+            weight_map[sr_row:row_end, sr_col:col_end] += hann
             unc_canvas[sr_row:row_end, sr_col:col_end] += (
-                unc_patch[:pr_end, :pc_end] * hann[:pr_end, :pc_end]
+                unc_patch[:pr_end, :pc_end] * hann
             )
-            unc_weight[sr_row:row_end, sr_col:col_end] += hann[:pr_end, :pc_end]
+            unc_weight[sr_row:row_end, sr_col:col_end] += hann
 
             processed += 1
             if processed % 10 == 0 or processed == total_patches:

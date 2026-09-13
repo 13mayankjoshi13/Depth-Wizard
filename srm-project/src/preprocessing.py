@@ -82,12 +82,18 @@ def tile_image(
                 if valid < min_valid_fraction:
                     continue
 
-                # Normalise to [0, 1] float32
+                # Normalise to [0, 1] float32.
+                # BUG-3 FIX: for float-dtype inputs always use 1.0 as the
+                # scale factor.  The old code used data.max() per tile, which
+                # made each tile independently stretch to its own local peak
+                # and caused a visible brightness grid after blending.  Using
+                # the dtype's full-range maximum (integer) or the fixed 1.0
+                # (float) ensures globally consistent normalisation.
                 dtype = src.dtypes[0]
                 if np.issubdtype(np.dtype(dtype), np.integer):
                     max_val = np.iinfo(np.dtype(dtype)).max
                 else:
-                    max_val = data.max() if data.max() > 0 else 1.0
+                    max_val = 1.0   # float GeoTIFFs are expected to already be in [0, 1]
                 patch = (data.astype(np.float32) / max_val).clip(0, 1)
 
                 patch_transform = src.window_transform(win)
