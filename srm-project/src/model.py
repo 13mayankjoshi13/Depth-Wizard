@@ -109,7 +109,10 @@ def load_realesrgan(
     -------
     RealESRGANer instance ready for .enhance()
     """
-    from basicsr.archs.rrdbnet_arch import RRDBNet
+    try:
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+    except ImportError:
+        from src.rrdbnet import RRDBNet
     from realesrgan import RealESRGANer
 
     if device is None:
@@ -284,7 +287,10 @@ def load_generator_for_training(
     Load ONLY the generator (RRDBNet) with pretrained weights.
     Used by train.py for fine-tuning (no discriminator, no RealESRGANer wrapper).
     """
-    from basicsr.archs.rrdbnet_arch import RRDBNet
+    try:
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+    except ImportError:
+        from src.rrdbnet import RRDBNet
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
