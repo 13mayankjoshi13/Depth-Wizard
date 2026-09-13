@@ -28,7 +28,7 @@ src/checkpoints/*.ckpt
 # Data (large satellite tiles — not tracked in git)
 # ─────────────────────────────────────────────────────────
 data/raw/
-data/synthetic_pairs/
+# data/synthetic_pairs/  # Tracked in git so Colab can run training immediately
 data/outputs/*.tif
 data/outputs/*.tiff
 data/outputs/*.png
