@@ -11,9 +11,11 @@ dist/
 build/
 .eggs/
 .venv/
+.venv-gpu/
 venv/
 env/
 .env
+temp/
 
 # ─────────────────────────────────────────────────────────
 # Model weights (large binary files — store on HuggingFace/Drive)
