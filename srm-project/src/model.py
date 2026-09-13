@@ -153,6 +153,28 @@ def load_realesrgan(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Convenience helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _generator_from_upsampler(upsampler) -> torch.nn.Module:
+    """
+    Extract the bare RRDBNet generator from a RealESRGANer wrapper.
+
+    RealESRGANer stores the generator under ``upsampler.model`` after
+    loading weights.  This helper centralises that knowledge so callers
+    do not need to know the internal attribute name.
+
+    Returns
+    -------
+    generator : torch.nn.Module — the RRDBNet, in eval() mode, on the
+                same device as the upsampler.
+    """
+    generator = upsampler.model
+    generator.eval()
+    return generator
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Multi-band Sentinel-2 inference
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -161,19 +183,28 @@ def enhance_multiband(
     patch: np.ndarray,
     rgb_band_indices: Tuple[int, ...] = S2_RGB_BANDS,
     outscale: int = 4,
+    generator: Optional[torch.nn.Module] = None,
 ) -> np.ndarray:
     """
     Run Real-ESRGAN on a Sentinel-2 multi-band patch.
 
     Strategy:
-      - RGB bands (indices rgb_band_indices) → standard 3-ch Real-ESRGAN
-      - Remaining bands → processed one-at-a-time as grayscale (replicated to 3ch),
-        then single output channel extracted.
+      - RGB bands (indices rgb_band_indices) → standard 3-ch Real-ESRGAN via
+        upsampler.enhance() (uint8 API preserved for compatibility).
+      - Remaining bands → when ``generator`` is provided, ALL non-RGB bands are
+        stacked into a single (N_gray, 3, H, W) batch and processed in ONE
+        generator.forward() call.  When ``generator`` is None, falls back to
+        the original serial per-band upsampler.enhance() loop (backward compat).
 
     Parameters
     ----------
+    upsampler       : RealESRGANer instance
     patch           : float32 (C, H, W) in [0, 1]
     rgb_band_indices: indices of (R, G, B) bands within patch
+    outscale        : upscale factor (must match model scale)
+    generator       : optional bare RRDBNet nn.Module — when provided, grayscale
+                      bands are batched into one forward pass (fast path).
+                      Obtain via ``_generator_from_upsampler(upsampler)``.
 
     Returns
     -------
@@ -182,7 +213,7 @@ def enhance_multiband(
     c, h, w = patch.shape
     sr_out = [None] * c
 
-    # ── RGB upsampling ────────────────────────────────────────────────────────
+    # ── RGB upsampling (always via upsampler.enhance — uint8 API) ─────────────
     valid_rgb = [i for i in rgb_band_indices if i < c]
     if len(valid_rgb) == 3:
         rgb = patch[list(valid_rgb)].transpose(1, 2, 0)          # (H, W, 3) float32
@@ -196,14 +227,46 @@ def enhance_multiband(
         valid_rgb = list(range(min(c, 3)))
 
     # ── Remaining bands (grayscale) ───────────────────────────────────────────
-    for i in range(c):
-        if sr_out[i] is not None:
-            continue
-        gray = patch[i]                                            # (H, W) float32 [0,1]
-        gray_u8 = (gray * 255).clip(0, 255).astype(np.uint8)
-        gray_3ch = np.stack([gray_u8, gray_u8, gray_u8], axis=-1) # (H, W, 3)
-        sr_3ch, _ = upsampler.enhance(gray_3ch, outscale=outscale) # (H*4, W*4, 3) uint8
-        sr_out[i] = sr_3ch[:, :, 0].astype(np.float32) / 255.0   # single channel
+    gray_indices = [i for i in range(c) if sr_out[i] is None]
+
+    if not gray_indices:
+        pass  # All bands already processed as RGB
+
+    elif generator is not None and len(gray_indices) > 0:
+        # ── FAST PATH: batch all grayscale bands into one forward pass ────────
+        # Stack: each band replicated to 3 channels → (N_gray, 3, H, W) float32
+        import torch
+        gray_batch_np = np.stack(
+            [np.stack([patch[i], patch[i], patch[i]], axis=0) for i in gray_indices],
+            axis=0,
+        ).astype(np.float32)                          # (N_gray, 3, H, W)
+
+        device = next(generator.parameters()).device
+        gray_t = torch.from_numpy(gray_batch_np).to(device)
+        if next(generator.parameters()).dtype == torch.float16:
+            gray_t = gray_t.half()
+
+        was_training = generator.training
+        generator.eval()
+        try:
+            with torch.no_grad():
+                sr_gray_t = generator(gray_t)          # (N_gray, 3, H*4, W*4)
+        finally:
+            if was_training:
+                generator.train()
+
+        sr_gray_np = sr_gray_t.float().cpu().numpy().clip(0, 1)  # (N_gray, 3, H*4, W*4)
+        for out_pos, band_idx in enumerate(gray_indices):
+            sr_out[band_idx] = sr_gray_np[out_pos, 0]            # extract channel 0
+
+    else:
+        # ── SLOW PATH (fallback): serial per-band upsampler.enhance() ─────────
+        for i in gray_indices:
+            gray = patch[i]                                        # (H, W) float32 [0,1]
+            gray_u8 = (gray * 255).clip(0, 255).astype(np.uint8)
+            gray_3ch = np.stack([gray_u8, gray_u8, gray_u8], axis=-1)  # (H, W, 3)
+            sr_3ch, _ = upsampler.enhance(gray_3ch, outscale=outscale)  # (H*4, W*4, 3) uint8
+            sr_out[i] = sr_3ch[:, :, 0].astype(np.float32) / 255.0
 
     return np.stack(sr_out, axis=0)   # (C, H*4, W*4)
 

@@ -238,6 +238,7 @@ def train(
     save_every: int = 10,
     num_workers: int = 2,
     use_amp: bool = True,
+    time_budget_hours: Optional[float] = None,
 ) -> dict:
     """
     Fine-tune the Real-ESRGAN generator with deep multi-loss optimization:
@@ -305,6 +306,7 @@ def train(
     }
     best_val_psnr = -float("inf")
     best_ckpt_path = output_dir / "model_finetuned_best.pth"
+    t_training_start = time.time()   # wall clock for --time-budget-hours
 
     logger.info("=" * 70)
     logger.info("🚀 Deep Super-Resolution Training Started (%d epochs, batch_size=%d)", epochs, batch_size)
@@ -414,6 +416,16 @@ def train(
             periodic_path = output_dir / f"model_finetuned_epoch{epoch:03d}.pth"
             save_generator_checkpoint(generator, periodic_path, epoch=epoch)
 
+        # ── Time-budget guard (demo-day safety net) ──────────────────────────
+        if time_budget_hours is not None:
+            elapsed_hours = (time.time() - t_training_start) / 3600.0
+            if elapsed_hours >= time_budget_hours:
+                logger.warning(
+                    "Time budget of %.2fh reached after epoch %d/%d — stopping early.",
+                    time_budget_hours, epoch, epochs,
+                )
+                break
+
     # Final checkpoint
     final_path = output_dir / "model_finetuned_final.pth"
     save_generator_checkpoint(
@@ -456,6 +468,11 @@ if __name__ == "__main__":
     parser.add_argument("--lambda-freq", type=float, default=0.02, help="FFT frequency loss weight")
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument(
+        "--time-budget-hours", type=float, default=None,
+        help="Stop training gracefully after this many wall-clock hours (saves checkpoint). "
+             "Use before demo day to avoid a mid-run cutoff.",
+    )
     args = parser.parse_args()
 
     result = train(
@@ -474,5 +491,6 @@ if __name__ == "__main__":
         lambda_freq=args.lambda_freq,
         save_every=args.save_every,
         num_workers=args.num_workers,
+        time_budget_hours=args.time_budget_hours,
     )
     print(f"\nDeep training finished. Best checkpoint saved at: {result['best_checkpoint']}")

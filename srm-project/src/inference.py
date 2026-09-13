@@ -78,9 +78,9 @@ def run_inference(
     Returns a dict with output paths and computed metrics (if GT provided).
     """
     import torch
-    from src.model import load_realesrgan, enhance_multiband
+    from src.model import load_realesrgan, enhance_multiband, _generator_from_upsampler
     from src.preprocessing import validate_tile, extract_rgb_preview
-    from src.uncertainty import tta_ensemble, save_uncertainty_heatmap
+    from src.uncertainty import tta_ensemble_batched, save_uncertainty_heatmap
     from src.metrics import evaluate_pair
 
     input_path = Path(input_path)
@@ -111,6 +111,10 @@ def run_inference(
         half=(half and device.type == "cuda"),
         device=device,
     )
+
+    # Extract bare generator for batched fast paths (Fix A + Fix B).
+    # upsampler.model is the RRDBNet; _generator_from_upsampler puts it in eval().
+    generator = _generator_from_upsampler(upsampler)
 
     # ── Read entire input image ───────────────────────────────────────────────
     with rasterio.open(input_path) as src:
@@ -156,14 +160,34 @@ def run_inference(
                 processed += 1
                 continue
 
-            def _enhance(p: np.ndarray) -> np.ndarray:
-                return enhance_multiband(upsampler, p, rgb_band_indices=rgb_band_indices, outscale=scale)
+            t_patch = time.time()
 
             if compute_uncertainty:
-                sr_patch, unc_patch = tta_ensemble(lr_patch, _enhance, n_augmentations=tta_n)
+                # FAST PATH (Fix A): all 8 TTA augmentations run in one batched
+                # generator.forward() call instead of 8 sequential enhance() calls.
+                sr_patch, unc_patch = tta_ensemble_batched(
+                    lr_patch, generator, device,
+                    n_augmentations=tta_n,
+                    half=(half and device.type == "cuda"),
+                )
             else:
-                sr_patch = _enhance(lr_patch)
+                # FAST PATH (Fix B): pass generator so grayscale bands are batched.
+                sr_patch = enhance_multiband(
+                    upsampler, lr_patch,
+                    rgb_band_indices=rgb_band_indices,
+                    outscale=scale,
+                    generator=generator,
+                )
                 unc_patch = np.zeros((sr_patch.shape[1], sr_patch.shape[2]), dtype=np.float32)
+
+            # Log first-patch wall time so speedup is immediately visible
+            if processed == 0:
+                logger.info(
+                    "  First patch completed in %.2fs (patch_size=%d, tta=%s, bands=%d)",
+                    time.time() - t_patch, patch_size,
+                    "batched×%d" % tta_n if compute_uncertainty else "off",
+                    lr_patch.shape[0],
+                )
 
             # SR patch position in output canvas
             sr_row = row_off * scale

@@ -28,6 +28,7 @@ Alternative (MC Dropout):
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable, List, Optional, Tuple
 
 import cv2
@@ -146,6 +147,102 @@ def tta_ensemble(
     # Per-pixel std across bands and augmentations
     std_map = np.std(stack, axis=0)               # (C, H_sr, W_sr)
     uncertainty = np.mean(std_map, axis=0)        # (H_sr, W_sr) — mean across bands
+
+    return mean_sr.astype(np.float32), uncertainty.astype(np.float32)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Batched TTA Ensemble (fast path — requires bare generator nn.Module)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def tta_ensemble_batched(
+    lr_patch: np.ndarray,
+    generator,              # torch.nn.Module — the raw RRDBNet generator
+    device,                 # torch.device
+    n_augmentations: int = 8,
+    half: bool = False,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Batched TTA ensemble: run all N augmentations in ONE forward pass.
+
+    Instead of calling the model N times sequentially, this function:
+      1. Applies _augment_chw to each of the N augmentations.
+      2. Stacks them into a single batch tensor of shape (N, C, H, W).
+      3. Calls generator.forward(batch) once → (N, C, H_sr, W_sr).
+      4. Deaugments each of the N outputs and aggregates mean + std.
+
+    This eliminates the N-1 redundant forward passes of tta_ensemble().
+
+    Parameters
+    ----------
+    lr_patch        : float32 (C, H, W) in [0, 1] — the low-resolution input
+    generator       : torch.nn.Module (RRDBNet) — obtained from upsampler.model
+    device          : torch.device to run inference on
+    n_augmentations : number of augmentations to use (max 8)
+    half            : if True, use float16 (requires CUDA)
+
+    Returns
+    -------
+    mean_sr     : float32 (C, H_sr, W_sr) — mean SR output across augmentations
+    uncertainty : float32 (H_sr, W_sr)    — per-pixel std dev across augmentations
+    """
+    import torch
+
+    n_aug = min(n_augmentations, 8)
+
+    # ── Step 1: Build all augmented versions as numpy arrays ──────────────────
+    aug_patches = []
+    valid_aug_ids = []
+    for aug_id in range(n_aug):
+        try:
+            aug_lr = _augment_chw(lr_patch, aug_id)   # (C, H, W)
+            aug_patches.append(aug_lr)
+            valid_aug_ids.append(aug_id)
+        except Exception as exc:
+            logger.warning("TTA augmentation %d failed during prep: %s — skipping", aug_id, exc)
+
+    if not aug_patches:
+        raise RuntimeError("All TTA augmentations failed during preparation")
+
+    # ── Step 2: Stack into a single batch tensor ──────────────────────────────
+    # Shape: (N_aug, C, H, W)
+    batch_np = np.stack(aug_patches, axis=0).astype(np.float32)
+    batch_t = torch.from_numpy(batch_np).to(device)
+    if half and device.type == "cuda":
+        batch_t = batch_t.half()
+
+    # ── Step 3: Single forward pass ───────────────────────────────────────────
+    t_fwd = time.time()
+    was_training = generator.training
+    generator.eval()
+    try:
+        with torch.no_grad():
+            sr_batch_t = generator(batch_t)   # (N_aug, C, H_sr, W_sr)
+    finally:
+        if was_training:
+            generator.train()
+    logger.debug("TTA batched forward (%d augs) took %.3fs", n_aug, time.time() - t_fwd)
+
+    # Back to float32 numpy: (N_aug, C, H_sr, W_sr)
+    sr_batch_np = sr_batch_t.float().cpu().numpy().clip(0, 1)
+
+    # ── Step 4: Deaugment each output ─────────────────────────────────────────
+    outputs: List[np.ndarray] = []
+    for i, aug_id in enumerate(valid_aug_ids):
+        try:
+            sr_canonical = _deaugment_chw(sr_batch_np[i], aug_id)
+            outputs.append(sr_canonical)
+        except Exception as exc:
+            logger.warning("TTA deaugmentation %d failed: %s — skipping", aug_id, exc)
+
+    if not outputs:
+        raise RuntimeError("All TTA deaugmentations failed")
+
+    # ── Step 5: Aggregate ─────────────────────────────────────────────────────
+    stack = np.stack(outputs, axis=0)             # (N, C, H_sr, W_sr)
+    mean_sr = np.mean(stack, axis=0)              # (C, H_sr, W_sr)
+    std_map = np.std(stack, axis=0)               # (C, H_sr, W_sr)
+    uncertainty = np.mean(std_map, axis=0)        # (H_sr, W_sr)
 
     return mean_sr.astype(np.float32), uncertainty.astype(np.float32)
 
