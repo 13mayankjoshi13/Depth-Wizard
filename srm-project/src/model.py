@@ -83,25 +83,78 @@ def _download_weights(model_key: str = "x4plus") -> Path:
 # Model loader
 # ──────────────────────────────────────────────────────────────────────────────
 
+class StandaloneRealESRGANer:
+    """Standalone drop-in replacement for RealESRGANer using pure PyTorch.
+    Ensures inference works even if the external realesrgan package is not installed.
+    """
+    def __init__(
+        self,
+        scale: int = 4,
+        model_path: Optional[str] = None,
+        model: Optional[torch.nn.Module] = None,
+        tile: int = 0,
+        tile_pad: int = 10,
+        pre_pad: int = 10,
+        half: bool = False,
+        device: Optional[torch.device] = None,
+    ):
+        self.scale = scale
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.half = half
+        self.model = model.to(self.device)
+        if model_path:
+            loadnet = torch.load(model_path, map_location=self.device)
+            if isinstance(loadnet, dict) and "params_ema" in loadnet:
+                keyname = "params_ema"
+            elif isinstance(loadnet, dict) and "params" in loadnet:
+                keyname = "params"
+            else:
+                keyname = None
+            state_dict = loadnet[keyname] if keyname is not None else loadnet
+            self.model.load_state_dict(state_dict, strict=True)
+        self.model.eval()
+        if self.half and self.device.type == "cuda":
+            self.model = self.model.half()
+
+    @torch.no_grad()
+    def enhance(self, img: np.ndarray, outscale: Optional[int] = None):
+        is_uint8 = (img.dtype == np.uint8)
+        if is_uint8:
+            img_t = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
+        else:
+            img_t = torch.from_numpy(img.transpose(2, 0, 1)).float()
+        img_t = img_t.unsqueeze(0).to(self.device)
+        if self.half and self.device.type == "cuda":
+            img_t = img_t.half()
+        output = self.model(img_t)
+        output = output.data.squeeze(0).float().cpu().clamp_(0, 1).numpy()
+        output = output.transpose(1, 2, 0)
+        if is_uint8:
+            output = (output * 255.0).round().astype(np.uint8)
+        return output, None
+
+
 def load_realesrgan(
     model_key: str = "x4plus",
     checkpoint_path: Optional[Path | str] = None,
     scale: int = 4,
-    tile: int = 400,
+    tile: int = 0,
     tile_pad: int = 10,
-    pre_pad: int = 0,
+    pre_pad: int = 10,
     half: bool = False,
     device: Optional[torch.device] = None,
 ):
     """
-    Load and return a RealESRGANer upsampler instance.
+    Load Real-ESRGAN upsampler.
 
     Parameters
     ----------
-    model_key        : 'x4plus' or 'x4plus_anime'
-    checkpoint_path  : Override weight path (e.g. fine-tuned checkpoint)
-    scale            : Upscale factor (must match model_key)
-    tile             : Tile size for chunked inference (reduces VRAM usage)
+    model_key        : 'x4plus' | 'x4plus_anime'
+    checkpoint_path  : Path to .pth weights file (auto-downloaded if None)
+    scale            : Upscale factor (must be 4 for x4plus)
+    tile             : Tile size for internal tiling (0 = disabled)
+    tile_pad         : Padding around tiles (pixels)
+    pre_pad          : Pre-padding applied to image border
     half             : Use FP16 inference (requires CUDA)
     device           : torch.device (auto-detected if None)
 
@@ -113,7 +166,10 @@ def load_realesrgan(
         from basicsr.archs.rrdbnet_arch import RRDBNet
     except ImportError:
         from src.rrdbnet import RRDBNet
-    from realesrgan import RealESRGANer
+    try:
+        from realesrgan import RealESRGANer
+    except ImportError:
+        RealESRGANer = StandaloneRealESRGANer
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
