@@ -226,6 +226,7 @@ def train_enhanced(
     save_every: int = 5,
     num_workers: int = 2,
     use_amp: bool = True,
+    gradient_checkpointing: bool = True,
     time_budget_hours: Optional[float] = None,
 ) -> dict:
     """
@@ -271,6 +272,15 @@ def train_enhanced(
         device=device,
     )
     generator.train()
+
+    # Enable gradient checkpointing to reduce VRAM (critical for Colab T4)
+    if gradient_checkpointing and hasattr(generator, 'enable_gradient_checkpointing'):
+        generator.enable_gradient_checkpointing()
+        logger.info("Gradient checkpointing ENABLED — saves ~40-60%% VRAM")
+
+    # Clear CUDA cache before allocating training tensors
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
 
     # ── Loss functions ────────────────────────────────────────────────────────
     l1_loss = nn.L1Loss()
