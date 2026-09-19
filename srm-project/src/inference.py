@@ -63,6 +63,137 @@ def unsharp_mask(image: np.ndarray, strength: float = 0.35, sigma: float = 1.0) 
     return np.clip(image + strength * detail, 0.0, 1.0)
 
 
+def detect_edges(image: np.ndarray) -> np.ndarray:
+    """Detect edges using Sobel operator for adaptive sharpening."""
+    import cv2
+    c, h, w = image.shape
+    edges = np.zeros((c, h, w), dtype=np.float32)
+    for i in range(c):
+        gray = (image[i] * 255).astype(np.uint8)
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        edges[i] = np.sqrt(sobel_x**2 + sobel_y**2) / 255.0
+    return edges
+
+
+def edge_aware_sharpen(sr_image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+    """Apply stronger sharpening only on textured/edge regions, not flat areas."""
+    edges = detect_edges(sr_image)
+    # Normalize edges to [0, 1] per band
+    for i in range(sr_image.shape[0]):
+        edge_max = edges[i].max()
+        if edge_max > 0:
+            edges[i] = edges[i] / edge_max
+
+    # Apply sharpening scaled by edge strength
+    sharpened = unsharp_mask(sr_image, strength=strength * 0.5)
+    # Blend based on edge presence
+    result = np.zeros_like(sr_image)
+    for i in range(sr_image.shape[0]):
+        edge_mask = edges[i] ** 1.5  # Boost high-edge regions
+        result[i] = sr_image[i] * (1 - edge_mask * 0.5) + sharpened[i] * edge_mask * 0.5
+
+    return result
+
+
+def multi_scale_sharpen(sr_image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+    """Apply unsharp mask at multiple scales for better detail recovery."""
+    result = sr_image.copy()
+
+    # Multi-scale: fine details (sigma=0.5), medium (sigma=1.0), coarse (sigma=2.0)
+    for sigma in [0.5, 1.0, 2.0]:
+        usm = unsharp_mask(sr_image, strength=strength * 0.35, sigma=sigma)
+        result = result * 0.5 + usm * 0.5
+
+    return result
+
+
+def enhanced_post_process(sr_image: np.ndarray, lr_image: Optional[np.ndarray] = None,
+                          strength: float = 0.5, high_quality: bool = False) -> np.ndarray:
+    """
+    Advanced post-processing for better visual quality.
+
+    1. Multi-scale unsharp mask - preserves both fine details and broader structures
+    2. Edge-aware sharpening - stronger sharpening on textured regions only
+    3. Optional detail injection from original LR image
+    4. Contrast enhancement via CLAHE for local contrast improvement
+
+    Parameters
+    ----------
+    sr_image : float32 (C, H, W) in [0, 1] - SR output from model
+    lr_image : float32 (C, H, W) in [0, 1] - Original LR input (optional, for detail injection)
+    strength : float - overall sharpening strength (0.0 to 1.0)
+    high_quality : bool - enable additional quality enhancements
+
+    Returns
+    -------
+    float32 (C, H, W) in [0, 1] - processed image
+    """
+    import cv2
+
+    result = sr_image.copy()
+
+    # Step 1: Multi-scale sharpening
+    result = multi_scale_sharpen(result, strength=strength)
+
+    # Step 2: Edge-aware sharpening
+    result = edge_aware_sharpen(result, strength=strength)
+
+    # Step 3: Optional detail injection from LR (high-frequency preservation)
+    if high_quality and lr_image is not None:
+        # Scale LR to match SR dimensions
+        c, sr_h, sr_w = result.shape
+        lr_c, lr_h, lr_w = lr_image.shape
+
+        # Compute scale factor
+        scale = sr_h // lr_h
+
+        # Process each band
+        for i in range(min(c, lr_c)):
+            lr = lr_image[i]
+            # Extract high-frequency details from LR
+            blurred_lr = cv2.GaussianBlur(lr, (0, 0), sigma=0.5)
+            laplacian = lr - blurred_lr
+
+            # Upscale detail to SR dimensions
+            detail_up = cv2.resize(
+                laplacian,
+                (sr_w, sr_h),
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+            # Inject detail into SR output
+            result[i] = result[i] + detail_up * 0.3 * strength
+
+    # Step 4: CLAHE for local contrast enhancement (optional, for high quality)
+    if high_quality:
+        result = apply_clahe(result)
+
+    return result.clip(0, 1)
+
+
+def apply_clahe(image: np.ndarray, clip_limit: float = 2.0, tile_grid_size: int = 8) -> np.ndarray:
+    """
+    Apply Contrast Limited Adaptive Histogram Equalization per channel.
+
+    Improves local contrast without over-amplifying noise.
+    """
+    import cv2
+    c, h, w = image.shape
+    result = np.zeros_like(image)
+
+    # Create CLAHE object
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_grid_size, tile_grid_size))
+
+    for i in range(c):
+        # Convert to 8-bit for CLAHE
+        img_8bit = (image[i] * 255).astype(np.uint8)
+        clahe_img = clahe.apply(img_8bit)
+        result[i] = clahe_img.astype(np.float32) / 255.0
+
+    return result
+
+
 def run_inference(
     input_path: Path | str,
     output_dir: Path | str = "data/outputs",
@@ -71,14 +202,15 @@ def run_inference(
     checkpoint_path: Optional[Path | str] = None,
     model_key: str = "x4plus",
     scale: int = 4,
-    patch_size: int = 256,
-    overlap: int = 32,
+    patch_size: int = 512,
+    overlap: int = 64,
     compute_uncertainty: bool = True,
-    tta_n: int = 8,
+    tta_n: int = 4,
     tile_size: int = 256,
     half: bool = False,
     rgb_band_indices: tuple = (2, 1, 0),
-    sharpen: float = 0.35,
+    sharpen: float = 0.5,
+    high_quality: bool = False,
 ) -> dict:
     """
     Run full inference on a single GeoTIFF and save outputs.
@@ -103,7 +235,13 @@ def run_inference(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: %s", device)
+
+    # Auto-enable FP16 on CUDA for speed boost
+    if device.type == "cuda" and not half:
+        half = True
+        logger.info("Auto-enabling FP16 inference (CUDA detected)")
+
+    logger.info("Device: %s | FP16: %s", device, half)
 
     # ── Validate input ────────────────────────────────────────────────────────
     meta = validate_tile(input_path)
@@ -240,9 +378,16 @@ def run_inference(
     # Normalise by blend weights
     wm = np.where(weight_map > 0, weight_map, 1.0)
     sr_full = (canvas / wm).astype(np.float32).clip(0, 1)
-    if sharpen > 0.0:
-        logger.info("Applying edge-preserving unsharp mask (strength=%.2f) …", sharpen)
-        sr_full = unsharp_mask(sr_full, strength=sharpen)
+
+    # Apply post-processing
+    if sharpen > 0.0 or high_quality:
+        if high_quality:
+            logger.info(f"Applying enhanced post-processing (HQ mode: sharpen={sharpen:.2f}) …")
+            sr_full = enhanced_post_process(sr_full, full_data, strength=sharpen, high_quality=True)
+        else:
+            logger.info(f"Applying standard sharpening (strength={sharpen:.2f}) …")
+            sr_full = multi_scale_sharpen(sr_full, strength=sharpen)
+
     uw = np.where(unc_weight > 0, unc_weight, 1.0)
     unc_full = (unc_canvas / uw).astype(np.float32)
 
@@ -342,14 +487,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", default=None, help="Fine-tuned checkpoint .pth (optional)")
     parser.add_argument("--model-key", default="x4plus", choices=["x4plus", "x4plus_anime"])
     parser.add_argument("--scale", type=int, default=4)
-    parser.add_argument("--patch-size", type=int, default=256)
-    parser.add_argument("--overlap", type=int, default=32)
+    parser.add_argument("--patch-size", type=int, default=512, help="Patch size (default 512 for speed)")
+    parser.add_argument("--overlap", type=int, default=64, help="Overlap between patches (default 64)")
     parser.add_argument("--tile-size", type=int, default=256, help="Real-ESRGAN tile size (VRAM trade-off)")
     parser.add_argument("--no-uncertainty", action="store_true", help="Skip uncertainty estimation (faster)")
-    parser.add_argument("--tta-n", type=int, default=8, help="Number of TTA augmentations")
+    parser.add_argument("--tta-n", type=int, default=4, help="Number of TTA augmentations (default 4, use 8 for max quality)")
     parser.add_argument("--half", action="store_true", help="Use FP16 inference (CUDA only)")
-    parser.add_argument("--sharpen", type=float, default=0.35, help="Edge sharpening strength (0.0 = off, 0.3-0.5 = crisp)")
+    parser.add_argument("--sharpen", type=float, default=0.5, help="Edge sharpening strength (0.0 = off, 0.3-0.6 = crisp)")
     parser.add_argument("--verbose", "-v", action="store_true")
+
+    # Preset modes for quick access
+    parser.add_argument(
+        "--preset",
+        choices=["fast", "balanced", "quality"],
+        default=None,
+        help="Quick preset: fast=(512px,no TTA), balanced=(512px,4 TTA), quality=(384px,8 TTA)"
+    )
     return parser.parse_args()
 
 
@@ -363,6 +516,24 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    # Apply preset values while allowing explicit CLI options to remain useful.
+    # Presets are intended for the SIH demo: fast prioritizes latency, quality
+    # prioritizes TTA stability and overlap blending.
+    preset_values = {
+        "fast": {"patch_size": 512, "overlap": 48, "tta_n": 0, "sharpen": 0.4, "uncertainty": False},
+        "balanced": {"patch_size": 512, "overlap": 64, "tta_n": 4, "sharpen": 0.5, "uncertainty": True},
+        "quality": {"patch_size": 384, "overlap": 64, "tta_n": 8, "sharpen": 0.6, "uncertainty": True},
+    }
+    selected = preset_values.get(args.preset)
+    if selected:
+        args.patch_size = selected["patch_size"]
+        args.overlap = selected["overlap"]
+        args.tta_n = selected["tta_n"]
+        args.sharpen = selected["sharpen"]
+        compute_uncertainty = selected["uncertainty"]
+    else:
+        compute_uncertainty = not args.no_uncertainty
+
     result = run_inference(
         input_path=args.input,
         output_dir=args.output_dir,
@@ -373,11 +544,12 @@ if __name__ == "__main__":
         scale=args.scale,
         patch_size=args.patch_size,
         overlap=args.overlap,
-        compute_uncertainty=not args.no_uncertainty,
+        compute_uncertainty=compute_uncertainty,
         tta_n=args.tta_n,
         tile_size=args.tile_size,
         half=args.half,
         sharpen=args.sharpen,
+        high_quality=(args.preset == "quality"),
     )
 
     print("\n" + "═" * 60)
