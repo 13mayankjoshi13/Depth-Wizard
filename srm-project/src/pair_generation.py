@@ -31,9 +31,24 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from scipy.ndimage import gaussian_filter
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Numpy-based Gaussian blur using cv2 (no scipy dependency for Windows)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def gaussian_filter_numpy(image, sigma):
+    """Apply Gaussian filter using cv2."""
+    # cv2.GaussianBlur expects (H, W) or (H, W, C) input
+    if image.ndim == 2:
+        return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    elif image.ndim == 3:
+        channels = [cv2.GaussianBlur(image[..., c], (0, 0), sigmaX=sigma, sigmaY=sigma) for c in range(image.shape[-1])]
+        return np.stack(channels, axis=-1)
+    else:
+        return image
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -73,10 +88,10 @@ def degrade(
     # ── Step 1: Gaussian blur (PSF simulation) ────────────────────────────────
     sigma = rng.uniform(*blur_sigma_range)
     if c == 1:
-        img = gaussian_filter(img[..., 0], sigma=sigma)[..., np.newaxis]
+        img = gaussian_filter_numpy(img[..., 0], sigma=sigma)[..., np.newaxis]
     else:
         blurred = np.stack(
-            [gaussian_filter(img[..., i], sigma=sigma) for i in range(c)],
+            [gaussian_filter_numpy(img[..., i], sigma=sigma) for i in range(c)],
             axis=-1,
         )
         img = blurred

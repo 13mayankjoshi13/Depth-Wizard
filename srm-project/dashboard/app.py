@@ -235,14 +235,31 @@ with st.sidebar:
                                   help="'Pretrained' = original Real-ESRGAN; fine-tuned versions show here after running train.py")
     checkpoint_path = None if selected_ckpt == "Pretrained (default)" else str(ckpt_dir / selected_ckpt)
 
-    tile_size = st.slider("Inference tile size", 128, 512, 256, 64,
-                           help="Smaller = less VRAM. Increase if you have >8GB VRAM.")
-    use_half = st.checkbox("FP16 inference (CUDA)", value=False,
-                            help="Faster on GPU but may reduce precision")
-    compute_unc = st.checkbox("Compute uncertainty map", value=True,
-                               help="TTA ensemble — adds ~8× inference time")
-    tta_n = st.slider("TTA augmentations", 2, 8, 4, disabled=not compute_unc,
-                       help="More = smoother uncertainty map, slower inference")
+    st.markdown("---")
+    st.subheader("⚡ Quality Preset")
+    preset = st.radio(
+        "Processing mode",
+        ["Fast (30-60s)", "Balanced (2-3min)", "Max Quality (5-10min)"],
+        index=1,
+        help="Fast: Large patches, no uncertainty | Balanced: Optimized defaults | Max Quality: Full TTA, smaller patches"
+    )
+
+    # Apply preset values
+    if "Fast" in preset:
+        patch_size, overlap, tta_n, sharpen, compute_unc, high_qual = 512, 48, 0, 0.4, False, False
+    elif "Balanced" in preset:
+        patch_size, overlap, tta_n, sharpen, compute_unc, high_qual = 512, 64, 4, 0.5, True, False
+    else:  # Max Quality
+        patch_size, overlap, tta_n, sharpen, compute_unc, high_qual = 384, 64, 8, 0.6, True, True
+
+    st.caption(f"Patch: {patch_size}px | Overlap: {overlap}px | TTA: {tta_n} | Sharpen: {sharpen}")
+
+    st.markdown("---")
+    st.subheader("🔧 Advanced Settings")
+    use_half = st.checkbox("FP16 inference (CUDA)", value=True if __import__("torch").cuda.is_available() else False,
+                            help="Faster on GPU with minimal quality loss")
+    tile_size = st.slider("Internal tile size", 128, 512, 256, 64,
+                           help="Rarely needs adjustment. Controls internal model tiling (disabled by default)")
 
     st.markdown("---")
     st.subheader("📊 Batch Mode")
@@ -378,12 +395,14 @@ with tab_single:
                     gt_path=gt_tif_path,
                     checkpoint_path=checkpoint_path,
                     model_key=model_key,
-                    patch_size=256,
-                    overlap=32,
+                    patch_size=patch_size,
+                    overlap=overlap,
                     compute_uncertainty=compute_unc,
                     tta_n=tta_n,
                     tile_size=tile_size,
                     half=use_half,
+                    sharpen=sharpen,
+                    high_quality=high_qual,
                 )
                 elapsed = time.time() - t0
                 status_box.update(label=f"✅ Done in {elapsed:.1f}s", state="complete")
